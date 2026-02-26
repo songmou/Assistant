@@ -101,9 +101,23 @@ public sealed class BrowserSessionManager : IAsyncDisposable
             foreach (var selector in QrSelectors)
             {
                 var locator = session.Page.Locator(selector);
-                if (await locator.CountAsync() > 0)
+                var count = await locator.CountAsync();
+                for (var i = 0; i < count; i++)
                 {
-                    return await locator.First.ScreenshotAsync();
+                    var candidate = locator.Nth(i);
+                    if (!await candidate.IsVisibleAsync())
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        return await candidate.ScreenshotAsync();
+                    }
+                    catch
+                    {
+                        // Try next candidate if current element cannot be captured.
+                    }
                 }
             }
 
