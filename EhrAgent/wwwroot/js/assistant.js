@@ -13,7 +13,7 @@ const messages = document.getElementById("messages");
 createSessionBtn.addEventListener("click", async () => {
     const userId = userIdInput.value.trim();
     if (!userId) {
-        alert("请输入用户标识");
+        showSessionError("请输入用户标识。");
         return;
     }
 
@@ -24,12 +24,14 @@ createSessionBtn.addEventListener("click", async () => {
     });
 
     if (!response.ok) {
-        alert("创建会话失败");
+        const errorText = await response.text();
+        showSessionError(`创建会话失败（${response.status}）：${errorText || "请稍后重试"}`);
         return;
     }
 
     const data = await response.json();
     sessionId = data.sessionId;
+    sessionInfo.className = "alert alert-light border";
     sessionInfo.innerText = `会话已创建：${sessionId}（用户：${data.userId}）`;
     await refreshStatus();
 
@@ -61,7 +63,10 @@ sendBtn.addEventListener("click", async () => {
 
     const data = await response.json();
     const actionSummary = (data.actions || [])
-        .map(a => `- ${a.type} ${a.target}: ${a.status}${a.error ? ` (${a.error})` : ""}`)
+        .map(a => {
+            const error = a.error ? String(a.error) : "";
+            return `- ${a.type} ${a.target}: ${a.status}${error ? ` (${error})` : ""}`;
+        })
         .join("\n");
     appendMessage("助手", `${data.reply}${actionSummary ? `\n\n执行结果:\n${actionSummary}` : ""}`, "assistant-message-ai");
 });
@@ -92,6 +97,9 @@ async function refreshStatus() {
 
     if (qrResp.ok) {
         const blob = await qrResp.blob();
+        if (qrImage.src.startsWith("blob:")) {
+            URL.revokeObjectURL(qrImage.src);
+        }
         qrImage.src = URL.createObjectURL(blob);
     }
 }
@@ -102,4 +110,9 @@ function appendMessage(sender, text, cssClass) {
     item.textContent = `${sender}：${text}`;
     messages.appendChild(item);
     messages.scrollTop = messages.scrollHeight;
+}
+
+function showSessionError(text) {
+    sessionInfo.className = "alert alert-danger";
+    sessionInfo.innerText = text;
 }

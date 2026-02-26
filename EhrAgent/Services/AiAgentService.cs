@@ -2,12 +2,13 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
-using Microsoft.Playwright;
 
 namespace EhrAgent.Services;
 
 public sealed class AiAgentService
 {
+    // 限制发送给模型的页面文本，避免请求过大导致延迟和成本升高。
+    private const int MaxPageTextLength = 3000;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly HttpClient _httpClient;
@@ -34,7 +35,7 @@ public sealed class AiAgentService
         try
         {
             var actions = await ExecuteDeterministicActionsAsync(session, message, cancellationToken);
-            var pageText = await session.Page.EvaluateAsync<string>("() => (document.body?.innerText || '').slice(0, 3000)");
+            var pageText = await session.Page.EvaluateAsync<string>($"() => (document.body?.innerText || '').slice(0, {MaxPageTextLength})");
             var aiReply = await GetAiReplyAsync(message, pageText, cancellationToken);
 
             return new ChatResultDto(aiReply, actions);
@@ -80,13 +81,13 @@ public sealed class AiAgentService
     {
         try
         {
-            var locator = session.Page.GetByText(text, new() { Exact = false }).First;
+            var locator = session.Page.GetByText(text, new() { Exact = false });
             if (await locator.CountAsync() == 0)
             {
                 return new BrowserActionResultDto("click", text, "skipped", "not found");
             }
 
-            await locator.ClickAsync();
+            await locator.First.ClickAsync();
             return new BrowserActionResultDto("click", text, "ok");
         }
         catch (Exception ex)

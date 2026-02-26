@@ -15,6 +15,7 @@ public sealed class BrowserSessionManager : IAsyncDisposable
     ];
 
     private readonly PortalOptions _options;
+    private static readonly string QrSelectorQuery = string.Join(", ", QrSelectors);
     private readonly ConcurrentDictionary<string, BrowserSession> _sessions = new();
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private IPlaywright? _playwright;
@@ -27,7 +28,8 @@ public sealed class BrowserSessionManager : IAsyncDisposable
 
     public async Task<(string SessionId, string UserId)> CreateSessionAsync(string userId, CancellationToken cancellationToken)
     {
-        var session = _sessions.Values.FirstOrDefault(s => s.UserId.Equals(userId, StringComparison.OrdinalIgnoreCase));
+        var normalizedUserId = userId.Trim();
+        var session = _sessions.Values.FirstOrDefault(s => s.UserId.Equals(normalizedUserId, StringComparison.OrdinalIgnoreCase));
         if (session is not null)
         {
             return (session.SessionId, session.UserId);
@@ -35,17 +37,14 @@ public sealed class BrowserSessionManager : IAsyncDisposable
 
         await EnsurePlaywrightAsync();
 
-        var browser = await _playwright!.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
-        {
-            Headless = _options.Headless
-        });
+        var browser = await LaunchBrowserAsync();
 
         var context = await browser.NewContextAsync(new BrowserNewContextOptions
         {
             ViewportSize = new ViewportSize { Width = 1440, Height = 900 }
         });
         var page = await context.NewPageAsync();
-        var newSession = new BrowserSession(Guid.NewGuid().ToString("N"), userId.Trim(), browser, context, page);
+        var newSession = new BrowserSession(Guid.NewGuid().ToString("N"), normalizedUserId, browser, context, page);
         try
         {
             await page.GotoAsync(_options.EntryUrl, new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
@@ -101,10 +100,10 @@ public sealed class BrowserSessionManager : IAsyncDisposable
         {
             foreach (var selector in QrSelectors)
             {
-                var locator = session.Page.Locator(selector).First;
+                var locator = session.Page.Locator(selector);
                 if (await locator.CountAsync() > 0)
                 {
-                    return await locator.ScreenshotAsync();
+                    return await locator.First.ScreenshotAsync();
                 }
             }
 
@@ -141,7 +140,7 @@ public sealed class BrowserSessionManager : IAsyncDisposable
     {
         var hasEntry = await page.GetByText("OA", new PageGetByTextOptions { Exact = false }).CountAsync() > 0
                        || await page.GetByText("EHR", new PageGetByTextOptions { Exact = false }).CountAsync() > 0;
-        var hasQr = await page.Locator("canvas, img[src*='qr'], .qrcode").CountAsync() > 0;
+        var hasQr = await page.Locator(QrSelectorQuery).CountAsync() > 0;
         return hasEntry && !hasQr;
     }
 
@@ -155,12 +154,6 @@ public sealed class BrowserSessionManager : IAsyncDisposable
         await _initLock.WaitAsync();
         try
         {
-            if (!_browserInstalled)
-            {
-                Microsoft.Playwright.Program.Main(["install", "chromium"]);
-                _browserInstalled = true;
-            }
-
             _playwright ??= await Playwright.CreateAsync();
         }
         finally
@@ -169,14 +162,52 @@ public sealed class BrowserSessionManager : IAsyncDisposable
         }
     }
 
+    private async Task<IBrowser> LaunchBrowserAsync()
+    {
+        try
+        {
+            return await _playwright!.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+            {
+                Headless = _options.Headless
+            });
+        }
+        catch (PlaywrightException) when (!_browserInstalled)
+        {
+            try
+            {
+                Microsoft.Playwright.Program.Main(["install", "chromium"]);
+                _browserInstalled = true;
+            }
+            catch (Exception installEx)
+            {
+                throw new InvalidOperationException($"Playwright浏览器安装失败（{installEx.Message}），请先执行 `playwright install chromium`。", installEx);
+            }
+
+            return await _playwright!.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+            {
+                Headless = _options.Headless
+            });
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var session in _sessions.Values)
         {
-            await session.Page.CloseAsync();
-            await session.Context.CloseAsync();
-            await session.Browser.CloseAsync();
-            session.Lock.Dispose();
+            try
+            {
+                await session.Page.CloseAsync();
+                await session.Context.CloseAsync();
+                await session.Browser.CloseAsync();
+            }
+            catch
+            {
+                // ignore cleanup failures per session
+            }
+            finally
+            {
+                session.Lock.Dispose();
+            }
         }
 
         _sessions.Clear();
