@@ -114,9 +114,9 @@ public sealed class BrowserSessionManager : IAsyncDisposable
                     {
                         return await candidate.ScreenshotAsync();
                     }
-                    catch
+                    catch (PlaywrightException ex)
                     {
-                        // Try next candidate if current element cannot be captured.
+                        session.LastError = ex.Message;
                     }
                 }
             }
